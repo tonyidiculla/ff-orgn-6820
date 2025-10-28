@@ -1,0 +1,41 @@
+
+> organization@0.1.0 dev
+> next dev -p 6700
+
+   ▲ Next.js 15.5.5
+   - Local:        http://localhost:6700
+   - Network:      http://192.168.68.138:6700
+   - Environments: .env.local
+
+ ✓ Starting...
+ ✓ Ready in 1185ms
+ ✓ Compiled /middleware in 101ms (114 modules)
+ ○ Compiling /organization ...
+ ✓ Compiled /organization in 768ms (802 modules)
+[StandardizedHeader] Computed values: {
+  userId: 'guest',
+  userName: null,
+  rawDisplayName: 'guest',
+  displayName: 'Guest',
+  initials: 'G',
+  avatarUrl: null,
+  roleDisplayName: 'Organization User'
+}
+ GET /organization?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI4OWFmNjA5MS1hNGE5LTQxYmMtYWI4My1hOTE4NGRhOWJiZTQiLCJlbWFpbCI6InRvbnlAZnVzaW9uZHVvdGVjaC5jb20iLCJ1c2VyUGxhdGZvcm1JZCI6IkgwMDAwMDAwMSIsImlhdCI6MTc2MTQ3NjkyMywiZXhwIjoxNzYyMDgxNzIzLCJhdWQiOiJmdXJmaWVsZC1obXMiLCJpc3MiOiJmdXJmaWVsZC1hdXRoIn0.P477QNxbaXX4Et32FaD1RZvlRhWTgH5tnY3-RR6hDiU 200 in 1116ms
+ ✓ Compiled in 335ms (332 modules)
+ ✓ Compiled in 132ms (332 modules)
+ ⚠ Fast Refresh had to perform a full reload due to a runtime error.
+ ✓ Compiled in 92ms (332 modules)
+[StandardizedHeader] Computed values: {
+  userId: 'guest',
+  userName: null,
+  rawDisplayName: 'guest',
+  displayName: 'Guest',
+  initials: 'G',
+  avatarUrl: null,
+  roleDisplayName: 'Organization User'
+}
+ GET /organization?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI4OWFmNjA5MS1hNGE5LTQxYmMtYWI4My1hOTE4NGRhOWJiZTQiLCJlbWFpbCI6InRvbnlAZnVzaW9uZHVvdGVjaC5jb20iLCJ1c2VyUGxhdGZvcm1JZCI6IkgwMDAwMDAwMSIsImlhdCI6MTc2MTQ3NjkyMywiZXhwIjoxNzYyMDgxNzIzLCJhdWQiOiJmdXJmaWVsZC1obXMiLCJpc3MiOiJmdXJmaWVsZC1hdXRoIn0.P477QNxbaXX4Et32FaD1RZvlRhWTgH5tnY3-RR6hDiU 200 in 104ms
+ ⚠ Fast Refresh had to perform a full reload due to a runtime error.
+ ✓ Compiled in 82ms (332 modules)
+ ✓ Compiled in 217ms (804 modules)

@@ -1,0 +1,45 @@
+{
+    "name": "organization",
+    "version": "0.1.0",
+    "type": "module",
+    "private": true,
+    "scripts": {
+        "dev": "next dev --turbopack --port 6700",
+        "build": "next build",
+        "start": "next start --port 6700",
+        "lint": "next lint",
+        "upload:profile-icons": "tsx scripts/upload-profile-icons.ts"
+    },
+    "dependencies": {
+        "@supabase/supabase-js": "^2.76.1",
+        "@tanstack/react-query": "^5.90.5",
+        "axios": "^1.13.0",
+        "clsx": "^2.1.1",
+        "dotenv": "^17.2.3",
+        "js-cookie": "^3.0.5",
+        "lucide-react": "^0.454.0",
+        "next": "^16.0.0",
+        "pg": "^8.16.3",
+        "pngjs": "^7.0.0",
+        "react": "^19.2.0",
+        "react-dom": "^19.2.0",
+        "tailwind-merge": "^3.3.1",
+        "tailwindcss-animate": "^1.0.7",
+        "tslib": "^2.8.1"
+    },
+    "devDependencies": {
+        "@tailwindcss/postcss": "^4.1.16",
+        "@types/js-cookie": "^3.0.6",
+        "@types/node": "^24.9.1",
+        "@types/pg": "^8.15.5",
+        "@types/react": "^19.2.2",
+        "@types/react-dom": "^19.2.2",
+        "autoprefixer": "^10.4.20",
+        "eslint": "^9.38.0",
+        "eslint-config-next": "^16.0.0",
+        "postcss": "^8.5.6",
+        "tailwindcss": "^4.1.16",
+        "tsx": "^4.20.6",
+        "typescript": "^5.9.3"
+    }
+}
