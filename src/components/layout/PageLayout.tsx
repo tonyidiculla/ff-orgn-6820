@@ -14,19 +14,31 @@ import { cn } from '@/lib/utils';
 
 interface PageWrapperProps {
   children: React.ReactNode;
+  color?: 'blue' | 'green' | 'purple' | 'orange' | 'pink' | 'cyan';
   className?: string;
 }
 
 /**
- * Basic page wrapper - provides minimal structure
+ * Basic page wrapper - provides minimal structure with optional color theme
  * Cards sit directly on gradient background
  */
 export const PageWrapper: React.FC<PageWrapperProps> = ({ 
   children, 
+  color = 'blue',
   className 
 }) => {
+  // Use subtle pastel colors with soft gradients (reduced saturation)
+  const colorClasses = {
+    blue: 'bg-gradient-to-br from-blue-50/70 via-blue-100/80 to-indigo-100/60',
+    green: 'bg-gradient-to-br from-green-50/70 via-green-100/80 to-cyan-100/60',
+    purple: 'bg-gradient-to-br from-rose-50/70 via-purple-100/80 to-violet-100/60',
+    orange: 'bg-gradient-to-br from-pink-50/70 via-orange-100/80 to-orange-200/60',
+    pink: 'bg-gradient-to-br from-rose-50/80 via-pink-100/90 to-purple-200/70',
+    cyan: 'bg-gradient-to-br from-sky-50/70 via-cyan-100/80 to-blue-200/60',
+  };
+
   return (
-    <div className={cn('min-h-screen', className)}>
+    <div className={cn('min-h-screen', colorClasses[color], className)}>
       {children}
     </div>
   );

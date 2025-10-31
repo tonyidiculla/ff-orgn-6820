@@ -2,11 +2,13 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { useRouter, useParams } from 'next/navigation'
-import { supabase } from '@/lib/supabase'
+import { supabase } from '@/lib/supabase-client'
 import { useAuth } from '@/context/AuthContext'
+import { getOrganizationById } from '@/lib/database-service'
 import CountrySelector from '@/components/CountrySelector'
 import CurrencySelector from '@/components/CurrencySelector'
 import { getCurrencyForCountry, getLanguageForCountry } from '@/hooks/useCountries'
+import { uploadFile } from '@/lib/storage-service'
 
 interface Organization {
     organization_id: string
@@ -85,14 +87,9 @@ export default function HospitalEntityCreation() {
             if (!organizationPlatformId) return
 
             try {
-                const { data, error } = await supabase
-                    .from('organizations')
-                    .select('organization_id, organization_name, organization_platform_id')
-                    .eq('organization_platform_id', organizationPlatformId)
-                    .single()
-
-                if (error) throw error
-                setOrganization(data)
+                const result = await getOrganizationById(organizationPlatformId)
+                if (!result.success) throw new Error(result.error)
+                setOrganization(result.data)
             } catch (err) {
                 console.error('Error fetching organization:', err)
                 setError('Failed to load organization')
@@ -345,8 +342,9 @@ export default function HospitalEntityCreation() {
             }
 
             try {
+                // Use profiles_with_auth view to get email and phone from auth.users
                 const { data, error } = await supabase
-                    .from('profiles')
+                    .from('profiles_with_auth')
                     .select('user_platform_id, first_name, last_name, email, phone')
                     .or(`first_name.ilike.%${managerSearchQuery}%,last_name.ilike.%${managerSearchQuery}%,email.ilike.%${managerSearchQuery}%,user_platform_id.ilike.%${managerSearchQuery}%`)
                     .limit(10)
@@ -387,18 +385,14 @@ export default function HospitalEntityCreation() {
             }
 
             // Upload logo if provided
-            let uploadedLogoPath: string | null = null
+            let logoStorageMetadata: any = null
             if (logoFile) {
-                const fileExt = logoFile.name.split('.').pop()
-                const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`
-                const filePath = `${fileName}`
-
-                const { error: uploadError } = await supabase.storage
-                    .from('hospital-logos')
-                    .upload(filePath, logoFile)
-
-                if (uploadError) throw uploadError
-                uploadedLogoPath = filePath
+                const metadata = await uploadFile({
+                    type: 'entity',
+                    id: entityPlatformId,
+                    file: logoFile
+                })
+                logoStorageMetadata = metadata
             }
 
             // Upload license documents if provided
@@ -441,64 +435,61 @@ export default function HospitalEntityCreation() {
                 ? JSON.parse(services)
                 : {}
 
+            // Create hospital using JWT + Service Account approach
+            const hospitalData = {
+                entity_platform_id: entityPlatformId,
+                entity_name: entityName.trim(),
+                organization_platform_id: organizationPlatformId,
+                hospital_type: hospitalType.trim() || null,
+                currency: currency || null,
+                language: language || null,
+                
+                // Location
+                address: address.trim() || null,
+                city: city.trim() || null,
+                state: state.trim() || null,
+                post_code: postCode.trim() || null,
+                country: country.trim() || null,
+                
+                // Manager
+                manager_platform_id: managerPlatformId || null,
+                manager_first_name: managerFirstName.trim() || null,
+                manager_last_name: managerLastName.trim() || null,
+                manager_email_id: managerEmail.trim() || null,
+                manager_phone_number: managerPhone.trim() || null,
+                
+                // Capacity
+                total_beds: totalBeds ? parseInt(totalBeds) : null,
+                icu_beds: icuBeds ? parseInt(icuBeds) : null,
+                treatment_rooms: treatmentRooms ? parseInt(treatmentRooms) : null,
+                surgical_suites: surgicalSuites ? parseInt(surgicalSuites) : null,
+                
+                // Veterinary
+                chief_veterinarian_name: chiefVeterinarianName.trim() || null,
+                chief_veterinarian_contact: chiefVeterinarianContact.trim() || null,
+                veterinary_license_number: veterinaryLicenseNumber.trim() || null,
+                veterinary_license_expiry: veterinaryLicenseExpiry || null,
+                veterinary_specialties: null,
+                
+                // Additional
+                accreditation_details: accreditationDetails.trim() || null,
+                medical_equipment: null,
+                operating_licenses: licensesArray,
+                services: servicesObject,
+                
+                // Logo and License Storage
+                logo_storage: logoStorageMetadata,
+                license_documents: uploadedLicenses.length > 0 ? uploadedLicenses : null,
+                
+                is_active: true,
+                created_by: user.id
+            }
+
             const { error: insertError } = await supabase
                 .from('hospital_master')
-                .insert([
-                    {
-                        entity_platform_id: entityPlatformId,
-                        entity_name: entityName.trim(),
-                        organization_platform_id: organizationPlatformId,
-                        hospital_type: hospitalType.trim() || null,
-                        currency: currency || null,
-                        language: language || null,
-                        
-                        // Location
-                        address: address.trim() || null,
-                        city: city.trim() || null,
-                        state: state.trim() || null,
-                        post_code: postCode.trim() || null,
-                        country: country.trim() || null,
-                        
-                        // Manager
-                        manager_platform_id: managerPlatformId || null,
-                        manager_first_name: managerFirstName.trim() || null,
-                        manager_last_name: managerLastName.trim() || null,
-                        manager_email_id: managerEmail.trim() || null,
-                        manager_phone_number: managerPhone.trim() || null,
-                        
-                        // Capacity
-                        total_beds: totalBeds ? parseInt(totalBeds) : null,
-                        icu_beds: icuBeds ? parseInt(icuBeds) : null,
-                        treatment_rooms: treatmentRooms ? parseInt(treatmentRooms) : null,
-                        surgical_suites: surgicalSuites ? parseInt(surgicalSuites) : null,
-                        
-                        // Veterinary
-                        chief_veterinarian_name: chiefVeterinarianName.trim() || null,
-                        chief_veterinarian_contact: chiefVeterinarianContact.trim() || null,
-                        veterinary_license_number: veterinaryLicenseNumber.trim() || null,
-                        veterinary_license_expiry: veterinaryLicenseExpiry || null,
-                        veterinary_specialties: null,
-                        
-                        // Additional
-                        accreditation_details: accreditationDetails.trim() || null,
-                        medical_equipment: null,
-                        operating_licenses: licensesArray,
-                        services: servicesObject,
-                        
-                        // Logo and License Storage
-                        logo_storage: uploadedLogoPath ? {
-                            url: supabase.storage.from('hospital-logos').getPublicUrl(uploadedLogoPath).data.publicUrl,
-                            file_path: uploadedLogoPath,
-                            storage_type: 'supabase'
-                        } : null,
-                        license_documents: uploadedLicenses.length > 0 ? uploadedLicenses : null,
-                        
-                        is_active: true,
-                        created_by: user.id
-                    }
-                ])
+                .insert(hospitalData)
 
-            if (insertError) throw insertError
+            if (insertError) throw new Error(insertError.message)
 
             router.push(`/organization/${organizationPlatformId}/entities`)
         } catch (err) {

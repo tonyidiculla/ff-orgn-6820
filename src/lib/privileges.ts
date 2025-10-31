@@ -175,9 +175,8 @@ export function getPrimaryRoleDisplayName(privileges: UserPrivileges | null): st
     if (!privileges || privileges.roles.length === 0) return 'User'
 
     const sortedRoles = [...privileges.roles].sort((a, b) => {
-        const rankA = PRIVILEGE_HIERARCHY[a.privilege_level]
-        const rankB = PRIVILEGE_HIERARCHY[b.privilege_level]
-        return rankA - rankB
+        // Sort by privilege level directly - lower numbers have higher privilege
+        return a.privilege_level - b.privilege_level
     })
 
     return sortedRoles[0]?.display_name ?? 'User'
@@ -218,7 +217,8 @@ export function aggregatePrivileges(
     let highestRank = Number.MAX_VALUE
 
     for (const role of activeRoles) {
-        const rank = PRIVILEGE_HIERARCHY[role.privilege_level]
+        // Use privilege_level directly - lower numbers have higher privilege
+        const rank = role.privilege_level
         if (rank < highestRank) {
             highestRank = rank
             highestPrivilegeLevel = role.privilege_level

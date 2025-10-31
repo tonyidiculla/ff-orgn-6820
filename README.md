@@ -69,7 +69,7 @@ Each icon is generated deterministically from the profile's name/email, producin
 
 ## Privilege and role system
 
-This application integrates with the `public.platform_roles` and `public.user_to_role_assignment` tables to provide fine-grained role-based access control across the platform.
+This application integrates with the `public.platform_roles` and `public.user_expertise_assignment` tables to provide fine-grained role-based access control across the platform.
 
 ### Privilege hierarchy
 
@@ -189,7 +189,7 @@ The `src/lib/privileges.ts` module exports:
 ### Database schema
 
 - **`public.platform_roles`**: Defines roles with `role_name`, `privilege_level`, `permissions` (jsonb), and `modules` (text[])
-- **`public.user_to_role_assignment`**: Links users to roles via `user_id`, `platform_role_id`, `is_active`, and `expires_at`
+- **`public.user_expertise_assignment`**: Links users to roles via `user_id`, `platform_role_id`, `is_active`, and `expires_at`
 
 The `UserContext` automatically fetches and aggregates privileges when a user signs in, combining all active role assignments into a single `UserPrivileges` object with deduplicated permissions and modules.
 

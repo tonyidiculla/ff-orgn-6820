@@ -1,177 +1,148 @@
 'use client';
 
-import React, { createContext, useContext, useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
-import Cookies from 'js-cookie';
-import axios from 'axios';
+import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { supabase } from '@/lib/supabase-client';
 
 interface User {
   id: string;
+  name: string;
   email: string;
-  firstName: string;
-  lastName: string;
   role: string;
-  avatarUrl?: string;
+  entity_platform_id: string | null;
+  employee_entity_id: string | null;
+  user_platform_id: string | null;
+  avatarUrl?: string | null;
+  // Organization app specific fields
+  firstName?: string;
+  lastName?: string;
   userPlatformId?: string;
 }
 
 interface AuthContextType {
   user: User | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<boolean>;
   logout: () => void;
-  refreshToken: () => Promise<boolean>;
-  refreshProfile: () => Promise<void>;
-  isAuthenticated: boolean;
+  refreshProfile?: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const AUTH_SERVICE_URL = process.env.NEXT_PUBLIC_AUTH_SERVICES_URL || 'http://localhost:6800';
-
-export function AuthProvider({ children }: { children: React.ReactNode }) {
+export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
-  const router = useRouter();
 
-  const isAuthenticated = !!user;
-
-  // Check if user is authenticated on mount
-  useEffect(() => {
-    // Add a small delay to ensure cookie is set by middleware
-    const timer = setTimeout(() => {
-      checkAuth();
-    }, 100);
-    
-    return () => clearTimeout(timer);
-  }, []);
-
-  const checkAuth = async () => {
-    const token = Cookies.get('furfield_token');
-    
-    console.log('[AuthContext] Checking auth, token exists:', !!token);
-    
-    if (!token) {
-      console.log('[AuthContext] No token found, setting loading to false');
-      setLoading(false);
-      return;
-    }
-
+  const fetchUser = async () => {
     try {
-      console.log('[AuthContext] Fetching profile from:', `${AUTH_SERVICE_URL}/api/auth/profile`);
-      const response = await axios.get(`${AUTH_SERVICE_URL}/api/auth/profile`, {
-        headers: { Authorization: `Bearer ${token}` },
-        timeout: 5000
+      console.log('[AuthContext] Fetching user from local API...');
+      console.log('[AuthContext] Current URL:', window.location.href);
+      
+      // Fetch user info from local organization API (avoids CORS issues)
+      const response = await fetch('/api/auth/me', {
+        credentials: 'include',
+        cache: 'no-store',
       });
+
+      console.log('[AuthContext] API response status:', response.status);
       
-      console.log('[AuthContext] Profile response:', response.data);
-      
-      if (response.data.success) {
-        const userData = response.data.data?.user || response.data.user;
-        console.log('[AuthContext] User data:', userData);
-        if (userData) {
-          setUser(userData);
-        }
+      if (response.ok) {
+        const userData = await response.json();
+        console.log('[AuthContext] User data from API:', userData);
+        
+        setUser({
+          id: userData.id || '',
+          name: userData.name || userData.firstName + ' ' + userData.lastName || 'User',
+          email: userData.email || '',
+          role: userData.role || 'user',
+          entity_platform_id: userData.entity_platform_id || null,
+          employee_entity_id: userData.employee_entity_id || null,
+          user_platform_id: userData.user_platform_id || userData.userPlatformId || null,
+          avatarUrl: userData.avatarUrl || null,
+          // Keep organization app specific fields for backward compatibility
+          firstName: userData.firstName || userData.first_name || '',
+          lastName: userData.lastName || userData.last_name || '',
+          userPlatformId: userData.userPlatformId || userData.user_platform_id || '',
+        });
+        console.log('[AuthContext] User set successfully from API');
+      } else {
+        console.log('[AuthContext] Auth check failed, status:', response.status);
       }
-    } catch (error: any) {
-      // Silently handle auth errors - middleware will handle redirects
-      console.error('[AuthContext] Auth check failed:', error.response?.data || error.message);
-      console.log('Auth check failed, but keeping cookie for middleware to handle');
+    } catch (error) {
+      console.error('[AuthContext] Failed to fetch user:', error);
     } finally {
       setLoading(false);
     }
   };
 
-  const login = async (email: string, password: string): Promise<boolean> => {
-    try {
-      const response = await axios.post(`${AUTH_SERVICE_URL}/api/auth/login`, {
-        email,
-        password,
-      });
+  useEffect(() => {
+    fetchUser();
 
-      if (response.data.success) {
-        const { token, refreshToken: refreshTokenValue, user: userData } = response.data;
-        
-        // Store tokens in cookies
-        Cookies.set('furfield_token', token, { expires: 1 }); // 1 day
-        Cookies.set('furfield_refresh_token', refreshTokenValue, { expires: 7 }); // 7 days
-        
-        setUser(userData);
-        return true;
+    // Listen for auth state changes from Supabase
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      console.log('[AuthContext] Auth state changed:', event, session ? 'session exists' : 'no session');
+      
+      if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+        console.log('[AuthContext] User signed in or token refreshed, fetching user data...');
+        await fetchUser();
+      } else if (event === 'SIGNED_OUT') {
+        console.log('[AuthContext] User signed out');
+        setUser(null);
       }
-      return false;
-    } catch (error) {
-      console.error('Login failed:', error);
-      return false;
-    }
-  };
+    });
 
-  const logout = () => {
-    Cookies.remove('furfield_token');
-    Cookies.remove('furfield_refresh_token');
-    setUser(null);
-    // Redirect to central auth service logout page to clear all auth data
-    window.location.href = 'http://localhost:6800/logout';
-  };
-
-  const refreshToken = async (): Promise<boolean> => {
-    try {
-      const refreshTokenValue = Cookies.get('furfield_refresh_token');
-      if (!refreshTokenValue) {
-        return false;
-      }
-
-      const response = await axios.post(`${AUTH_SERVICE_URL}/api/auth/refresh`, {
-        refreshToken: refreshTokenValue,
-      });
-
-      if (response.data.success) {
-        const { token, refreshToken: newRefreshToken, user: userData } = response.data;
-        
-        Cookies.set('furfield_token', token, { expires: 1 });
-        Cookies.set('furfield_refresh_token', newRefreshToken, { expires: 7 });
-        
-        setUser(userData);
-        return true;
-      }
-      return false;
-    } catch (error) {
-      console.error('Token refresh failed:', error);
-      return false;
-    }
-  };
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
 
   const refreshProfile = async (): Promise<void> => {
-    const token = Cookies.get('furfield_token');
-    if (!token) return;
-
     try {
-      const response = await axios.get(`${AUTH_SERVICE_URL}/api/auth/profile`, {
-        headers: { Authorization: `Bearer ${token}` },
-        timeout: 5000
+      console.log('[AuthContext] Refreshing user profile...');
+      const response = await fetch('/api/auth/me', {
+        credentials: 'include',
       });
-      
-      if (response.data.success) {
-        const userData = response.data.data?.user || response.data.user;
-        if (userData) {
-          setUser(userData);
-        }
+
+      if (response.ok) {
+        const userData = await response.json();
+        console.log('[AuthContext] Profile refreshed:', userData);
+        
+        setUser(prevUser => ({
+          ...prevUser!,
+          avatarUrl: userData.avatarUrl || prevUser?.avatarUrl || null,
+          // Update any other fields that might have changed
+          name: userData.name || userData.firstName + ' ' + userData.lastName || prevUser?.name || 'User',
+          firstName: userData.firstName || userData.first_name || prevUser?.firstName || '',
+          lastName: userData.lastName || userData.last_name || prevUser?.lastName || '',
+        }));
       }
     } catch (error) {
-      console.error('Profile refresh failed:', error);
+      console.error('[AuthContext] Failed to refresh profile:', error);
     }
+  };
+
+  const logout = async () => {
+    console.log('[AuthContext] Logging out...');
+    
+    try {
+      // Call the logout API endpoint
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        credentials: 'include',
+      });
+    } catch (error) {
+      console.error('[AuthContext] Logout API call failed:', error);
+    }
+    
+    // Reset user state
+    setUser(null);
+    
+    console.log('[AuthContext] Redirecting to login...');
+    
+    // Redirect to login page
+    window.location.href = '/auth/login';
   };
 
   return (
-    <AuthContext.Provider value={{
-      user,
-      loading,
-      login,
-      logout,
-      refreshToken,
-      refreshProfile,
-      isAuthenticated,
-    }}>
+    <AuthContext.Provider value={{ user, loading, logout, refreshProfile }}>
       {children}
     </AuthContext.Provider>
   );

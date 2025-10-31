@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { supabase } from '@/lib/supabase'
+import { supabase } from '@/lib/supabase-client'
 
 export interface UserSearchResult {
     user_id: string
@@ -57,7 +57,7 @@ export default function UserSearch({
             try {
                 const { data, error } = await supabase
                     
-                    .from('profiles')
+                    .from('profiles_with_auth')
                     .select('user_id, user_platform_id, first_name, last_name, email')
                     .eq('user_id', selectedUserId)
                     .single()
@@ -98,7 +98,7 @@ export default function UserSearch({
 
                 const { data, error } = await supabase
                     
-                    .from('profiles')
+                    .from('profiles_with_auth')
                     .select('user_id, user_platform_id, first_name, last_name, email')
                     .or(`first_name.ilike.%${query}%,last_name.ilike.%${query}%,email.ilike.%${query}%,user_platform_id.ilike.%${query}%`)
                     .limit(10)

@@ -2,11 +2,14 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { useRouter, useParams } from 'next/navigation'
-import { supabase } from '@/lib/supabase'
+import { supabase } from '@/lib/supabase-client'
 import { useAuth } from '@/context/AuthContext'
+import { updateHospitalEntity } from '@/lib/actions/hospital-actions'
+import { getHospitalById, getOrganizationById } from '@/lib/database-service'
 import CountrySelector from '@/components/CountrySelector'
 import CurrencySelector from '@/components/CurrencySelector'
 import { getCurrencyForCountry, getLanguageForCountry } from '@/hooks/useCountries'
+import { uploadFile, getPublicUrl } from '@/lib/storage-service'
 
 interface Entity {
     entity_platform_id: string
@@ -160,25 +163,16 @@ export default function EditEntityPage() {
             try {
                 setFetchingData(true)
 
-                // Fetch organization
-                const { data: orgData, error: orgError } = await supabase
-                    .from('organizations')
-                    .select('organization_id, organization_name, organization_platform_id')
-                    .eq('organization_platform_id', organizationPlatformId)
-                    .single()
-
-                if (orgError) throw orgError
-                setOrganization(orgData)
+                // Fetch organization using JWT + Service Account
+                const orgResult = await getOrganizationById(organizationPlatformId)
+                if (!orgResult.success) throw new Error(orgResult.error)
+                setOrganization(orgResult.data)
 
                 // Fetch entity from public schema
-                const { data: entityData, error: entityError } = await supabase
-                    
-                    .from('hospital_master')
-                    .select('*')
-                    .eq('entity_platform_id', entityPlatformId)
-                    .single()
-
-                if (entityError) throw entityError
+                const entityResult = await getHospitalById(entityPlatformId)
+                if (!entityResult.success) throw new Error(entityResult.error)
+                
+                const entityData = entityResult.data
                 setEntity(entityData)
                 
                 console.log('Fetched entity data:', entityData)
@@ -239,14 +233,19 @@ export default function EditEntityPage() {
                     setSelectedServices([])
                 }
                 
-                // Initialize selected modules from subscribed_modules
-                if (entityData.subscribed_modules && Array.isArray(entityData.subscribed_modules)) {
-                    console.log('📦 Subscribed modules from DB:', entityData.subscribed_modules)
-                    const subscribedModuleIds = entityData.subscribed_modules.map((m: any) => m.module_id)
-                    console.log('📋 Extracted module IDs:', subscribedModuleIds)
-                    setSelectedModules(subscribedModuleIds)
+                // Fetch active subscriptions from hospital_subscriptions table
+                const { data: subscriptions, error: subsError } = await supabase
+                    .from('hospital_subscriptions')
+                    .select('module_id, status')
+                    .eq('entity_platform_id', entityPlatformId)
+                    .eq('status', 'active')
+                
+                if (subsError) {
+                    console.error('⚠️ Error fetching subscriptions:', subsError)
                 } else {
-                    console.log('⚠️ No subscribed_modules found in entity data')
+                    const subscribedModuleIds = subscriptions?.map((s: any) => s.module_id) || []
+                    console.log('📦 Active subscriptions from table:', subscribedModuleIds)
+                    setSelectedModules(subscribedModuleIds)
                 }
                 
                 setIsActive(entityData.is_active)
@@ -334,50 +333,6 @@ export default function EditEntityPage() {
         fetchLocationCurrency()
     }, [country])
 
-    // Debug: Check for orphaned modules when both arrays are populated
-    useEffect(() => {
-        if (selectedModules.length > 0 && availableModules.length > 0) {
-            const availableModuleIds = availableModules.map(m => m.id)
-            const orphanedIds = selectedModules.filter(id => !availableModuleIds.includes(id))
-            
-            if (orphanedIds.length > 0) {
-                console.warn('⚠️  Orphaned module IDs in selectedModules:', orphanedIds)
-                console.log('🧹 Cleaning up orphaned module IDs from subscribed_modules...')
-                
-                // Remove orphaned module IDs from selectedModules
-                const cleanedModuleIds = selectedModules.filter(id => !orphanedIds.includes(id))
-                console.log(`📊 Before cleanup: ${selectedModules.length} modules, After cleanup: ${cleanedModuleIds.length} modules`)
-                
-                // Update the database to remove orphaned module IDs
-                const cleanupOrphanedModules = async () => {
-                    try {
-                        const { error: updateError } = await supabase
-                            .from('hospital_master')
-                            .update({ 
-                                subscribed_modules: cleanedModuleIds,
-                                updated_at: new Date().toISOString()
-                            })
-                            .eq('entity_platform_id', entityPlatformId)
-
-                        if (updateError) {
-                            console.error('❌ Failed to clean up orphaned modules:', updateError)
-                        } else {
-                            console.log('✅ Successfully cleaned up orphaned modules from database')
-                            // Update local state
-                            setSelectedModules(cleanedModuleIds)
-                        }
-                    } catch (err) {
-                        console.error('❌ Error during orphaned module cleanup:', err)
-                    }
-                }
-                
-                cleanupOrphanedModules()
-            } else {
-                console.log('✅ All selected modules found in available modules')
-            }
-        }
-    }, [selectedModules, availableModules])
-
     // Search for managers
     useEffect(() => {
         async function searchManagers() {
@@ -388,7 +343,7 @@ export default function EditEntityPage() {
 
             try {
                 const { data, error } = await supabase
-                    .from('profiles')
+                    .from('profiles_with_auth')
                     .select('user_platform_id, first_name, last_name, email, phone')
                     .or(`first_name.ilike.%${managerSearchQuery}%,last_name.ilike.%${managerSearchQuery}%,email.ilike.%${managerSearchQuery}%,user_platform_id.ilike.%${managerSearchQuery}%`)
                     .limit(10)
@@ -425,6 +380,207 @@ export default function EditEntityPage() {
         setManagerPhone('')
         setManagerSearchQuery('')
         setManagerSearchResults([])
+    }
+
+    // Check if subscription is expired
+    const isSubscriptionExpired = () => {
+        if (!entity?.subscription_end_date) return false
+        const now = new Date()
+        const endDate = new Date(entity.subscription_end_date)
+        return endDate <= now
+    }
+
+    // Handle individual module activation
+    const handleActivateModule = async (moduleId: number) => {
+        const module = availableModules.find(m => m.id === moduleId)
+        if (!module) return
+
+        // Check if subscription is still active
+        const now = new Date()
+        const endDate = entity?.subscription_end_date ? new Date(entity.subscription_end_date) : now
+        const isSubscriptionActive = endDate > now
+
+        if (!isSubscriptionActive) {
+            alert('⛔ Subscription has expired. Please renew the subscription before activating new modules.')
+            return
+        }
+
+        // Calculate prorated cost
+        const remainingMonths = Math.max(0, 
+            (endDate.getFullYear() - now.getFullYear()) * 12 + 
+            (endDate.getMonth() - now.getMonth()) +
+            (endDate.getDate() >= now.getDate() ? 1 : 0)
+        )
+        const fullYearPrice = calculateCustomerPrice(parseFloat(module.base_price))
+        const proRatedPrice = fullYearPrice * (remainingMonths / 12)
+
+        const message = remainingMonths > 0
+            ? `Activate ${module.module_display_name}?\n\nYou will be charged a prorated amount of ${getCurrencySymbol(currency)}${proRatedPrice.toFixed(2)} for the remaining ${remainingMonths} month(s) of your subscription.\n\nFull annual price: ${getCurrencySymbol(currency)}${fullYearPrice.toFixed(2)}/year`
+            : `Activate ${module.module_display_name}?\n\nYour subscription expires soon. You will be charged ${getCurrencySymbol(currency)}${fullYearPrice.toFixed(2)}/year upon renewal.`
+
+        if (!confirm(message)) {
+            return
+        }
+
+        setLoading(true)
+        setError(null)
+
+        try {
+            console.log('🟢 Activating module:', moduleId, 'for entity:', entityPlatformId)
+            
+            // Get current user's auth ID
+            const { data: { user: authUser } } = await supabase.auth.getUser()
+            
+            // Insert or update subscription in hospital_subscriptions table
+            const { data: upsertData, error: upsertError } = await supabase
+                .from('hospital_subscriptions')
+                .upsert({
+                    entity_platform_id: entityPlatformId,
+                    module_id: moduleId,
+                    status: 'active',
+                    base_price: parseFloat(module.base_price),
+                    customer_price: fullYearPrice,
+                    pro_rated_price: proRatedPrice,
+                    remaining_months: remainingMonths,
+                    payment_frequency: module.payment_frequency,
+                    activated_at: new Date().toISOString(),
+                    created_by: authUser?.id,
+                    updated_by: authUser?.id,
+                }, {
+                    onConflict: 'entity_platform_id,module_id'
+                })
+                .select()
+
+            console.log('Upsert result:', { upsertData, upsertError })
+            
+            if (upsertError) {
+                console.error('❌ UPSERT ERROR:', upsertError)
+                throw upsertError
+            }
+
+            // Calculate new yearly cost from all active subscriptions
+            const { data: activeSubscriptions } = await supabase
+                .from('hospital_subscriptions')
+                .select('customer_price')
+                .eq('entity_platform_id', entityPlatformId)
+                .eq('status', 'active')
+
+            const newYearlyCost = activeSubscriptions?.reduce((sum, s) => sum + (s.customer_price || 0), 0) || 0
+
+            // Update yearly cost in hospital_master
+            await supabase
+                .from('hospital_master')
+                .update({ yearly_subscription_cost: newYearlyCost })
+                .eq('entity_platform_id', entityPlatformId)
+
+            // Refresh selected modules
+            const { data: updatedSubscriptions } = await supabase
+                .from('hospital_subscriptions')
+                .select('module_id')
+                .eq('entity_platform_id', entityPlatformId)
+                .eq('status', 'active')
+
+            const activeModuleIds = updatedSubscriptions?.map((s: any) => s.module_id) || []
+            setSelectedModules(activeModuleIds)
+
+            alert(`✅ ${module.module_display_name} activated!\n\nProrated charge: ${getCurrencySymbol(currency)}${proRatedPrice.toFixed(2)}`)
+        } catch (err) {
+            console.error('Error activating module:', err)
+            const errorMessage = err instanceof Error ? err.message : 'Failed to activate module'
+            setError(errorMessage)
+            alert(`❌ Error: ${errorMessage}`)
+        } finally {
+            setLoading(false)
+        }
+    }
+
+    // Handle individual module deactivation
+    const handleDeactivateModule = async (moduleId: number) => {
+        const module = availableModules.find(m => m.id === moduleId)
+        if (!module) return
+
+        if (!confirm(`Deactivate ${module.module_display_name}?\n\nThis will take effect immediately. No refund will be issued for the current billing period.`)) {
+            return
+        }
+
+        setLoading(true)
+        setError(null)
+
+        try {
+            console.log('🔴 Deactivating module:', moduleId, 'for entity:', entityPlatformId)
+            
+            // Get current user's auth ID
+            const { data: { user: authUser } } = await supabase.auth.getUser()
+            
+            // Update subscription status to inactive in hospital_subscriptions table
+            const { data: updateData, error: updateError } = await supabase
+                .from('hospital_subscriptions')
+                .update({ 
+                    status: 'inactive',
+                    deactivated_at: new Date().toISOString(),
+                    updated_by: authUser?.id
+                })
+                .eq('entity_platform_id', entityPlatformId)
+                .eq('module_id', moduleId)
+                .select()
+
+            console.log('Update result:', { updateData, updateError })
+            
+            if (updateError) {
+                console.error('❌ UPDATE ERROR:', updateError)
+                throw updateError
+            }
+            
+            if (!updateData || updateData.length === 0) {
+                console.warn('⚠️ No rows updated - possible RLS policy issue or record not found')
+            }
+
+            // Calculate new yearly cost from remaining active subscriptions
+            const { data: activeSubscriptions } = await supabase
+                .from('hospital_subscriptions')
+                .select('customer_price')
+                .eq('entity_platform_id', entityPlatformId)
+                .eq('status', 'active')
+
+            const newYearlyCost = activeSubscriptions?.reduce((sum, s) => sum + (s.customer_price || 0), 0) || 0
+
+            // Update yearly cost in hospital_master
+            await supabase
+                .from('hospital_master')
+                .update({ yearly_subscription_cost: newYearlyCost })
+                .eq('entity_platform_id', entityPlatformId)
+
+            // Refresh selected modules
+            const { data: updatedSubscriptions } = await supabase
+                .from('hospital_subscriptions')
+                .select('module_id')
+                .eq('entity_platform_id', entityPlatformId)
+                .eq('status', 'active')
+
+            const activeModuleIds = updatedSubscriptions?.map((s: any) => s.module_id) || []
+            setSelectedModules(activeModuleIds)
+
+            alert(`✅ ${module.module_display_name} deactivated successfully`)
+        } catch (err) {
+            console.error('Error deactivating module:', err)
+            const errorMessage = err instanceof Error ? err.message : 'Failed to deactivate module'
+            setError(errorMessage)
+            alert(`❌ Error: ${errorMessage}`)
+        } finally {
+            setLoading(false)
+        }
+    }
+
+    // Toggle handler for switch UI
+    const handleModuleToggle = (moduleId: number) => {
+        // Check if module is currently active based on selectedModules state
+        const isCurrentlyActive = selectedModules.includes(moduleId)
+        
+        if (isCurrentlyActive) {
+            handleDeactivateModule(moduleId)
+        } else {
+            handleActivateModule(moduleId)
+        }
     }
 
     // Handle logo file selection
@@ -515,18 +671,14 @@ export default function EditEntityPage() {
 
         try {
             // Upload logo if changed
-            let uploadedLogoPath: string | null = null
+            let logoStorageMetadata: any = null
             if (logoFile) {
-                const fileExt = logoFile.name.split('.').pop()
-                const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`
-                const filePath = `${fileName}`
-
-                const { error: uploadError } = await supabase.storage
-                    .from('hospital-logos')
-                    .upload(filePath, logoFile)
-
-                if (uploadError) throw uploadError
-                uploadedLogoPath = filePath
+                const metadata = await uploadFile({
+                    type: 'entity',
+                    id: entityPlatformId,
+                    file: logoFile
+                })
+                logoStorageMetadata = metadata
             }
 
             // Upload license documents if provided
@@ -711,12 +863,8 @@ export default function EditEntityPage() {
             }
 
             // Add logo if uploaded
-            if (uploadedLogoPath) {
-                updateData.logo_storage = {
-                    url: supabase.storage.from('hospital-logos').getPublicUrl(uploadedLogoPath).data.publicUrl,
-                    file_path: uploadedLogoPath,
-                    storage_type: 'supabase'
-                }
+            if (logoStorageMetadata) {
+                updateData.logo_storage = logoStorageMetadata
             }
 
             // Add license documents if uploaded
@@ -727,28 +875,26 @@ export default function EditEntityPage() {
             console.log('Updating entity with data:', updateData)
             console.log('Subscribed modules count:', subscribedModulesArray.length)
 
-            const { error: updateError } = await supabase
-                
+            // Update entity directly using authenticated Supabase client
+            const { data: updateResult, error: updateError } = await supabase
                 .from('hospital_master')
                 .update(updateData)
                 .eq('entity_platform_id', entityPlatformId)
+                .select()
 
             if (updateError) {
                 console.error('❌ Error updating entity:', updateError)
-                alert(`Failed to save: ${updateError.message || JSON.stringify(updateError)}`)
+                alert(`Failed to save: ${updateError.message}`)
                 throw updateError
             }
 
-            console.log('✅ Entity updated successfully!')
+            console.log('✅ Entity updated successfully:', updateResult)
             
-            // Refresh entity data to show updated subscribed modules
-            const { data: refreshedEntityData, error: refreshError } = await supabase
-                .from('hospital_master')
-                .select('*')
-                .eq('entity_platform_id', entityPlatformId)
-                .single()
-
-            if (!refreshError && refreshedEntityData) {
+            // Refresh entity data to show updated subscribed modules using JWT + Service Account
+            const refreshResult = await getHospitalById(entityPlatformId)
+            
+            if (refreshResult.success && refreshResult.data) {
+                const refreshedEntityData = refreshResult.data
                 console.log('🔄 Refreshed entity data:', refreshedEntityData.subscribed_modules?.length || 0, 'modules')
                 console.log('🔄 Refreshed subscribed_modules:', refreshedEntityData.subscribed_modules)
                 setEntity(refreshedEntityData)
@@ -759,8 +905,8 @@ export default function EditEntityPage() {
                     console.log('🔄 Setting selectedModules to:', refreshedModuleIds)
                     setSelectedModules(refreshedModuleIds)
                 }
-            } else if (refreshError) {
-                console.error('❌ Error refreshing entity data:', refreshError)
+            } else {
+                console.error('❌ Error refreshing entity data:', refreshResult.error)
             }
             
             // Module selection is stored in the hospitals table only
@@ -790,7 +936,7 @@ export default function EditEntityPage() {
 
     if (fetchingData) {
         return (
-            <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-cyan-50 to-teal-50 flex items-center justify-center p-6">
+            <div className="min-h-screen bg-linear-to-br from-emerald-50 via-cyan-50 to-teal-50 flex items-center justify-center p-6">
                 <div className="text-center">
                     <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-600 mx-auto"></div>
                     <p className="text-gray-600 mt-4">Loading entity data...</p>
@@ -1486,8 +1632,58 @@ export default function EditEntityPage() {
                             Hospital Management Modules
                         </h2>
                         <p className="text-sm text-gray-600 mb-4">
-                            Select the modules you want to activate for this hospital.
+                            Use toggle switches to activate or deactivate modules instantly.
                         </p>
+
+                        {/* Subscription expiry warning */}
+                        {entity?.subscription_end_date && (() => {
+                            const now = new Date()
+                            const endDate = new Date(entity.subscription_end_date)
+                            const daysRemaining = Math.ceil((endDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
+                            const isExpired = daysRemaining <= 0
+                            const isExpiringSoon = daysRemaining > 0 && daysRemaining <= 30
+                            
+                            if (isExpired) {
+                                return (
+                                    <div className="mb-4 p-4 bg-red-50 border-2 border-red-400 rounded-lg">
+                                        <div className="flex items-start gap-3">
+                                            <span className="text-2xl">⛔</span>
+                                            <div className="flex-1">
+                                                <p className="text-sm font-semibold text-red-800 mb-1">
+                                                    Subscription Expired
+                                                </p>
+                                                <p className="text-sm text-red-700">
+                                                    Your subscription expired on {endDate.toLocaleDateString()}. 
+                                                    Module toggles are disabled. Please renew your subscription to activate modules.
+                                                </p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )
+                            }
+                            
+                            if (isExpiringSoon) {
+                                return (
+                                    <div className="mb-4 p-4 bg-yellow-50 border-2 border-yellow-400 rounded-lg">
+                                        <div className="flex items-start gap-3">
+                                            <span className="text-2xl">⏰</span>
+                                            <div className="flex-1">
+                                                <p className="text-sm font-semibold text-yellow-800 mb-1">
+                                                    Subscription Expiring Soon
+                                                </p>
+                                                <p className="text-sm text-yellow-700">
+                                                    Your subscription expires in {daysRemaining} day{daysRemaining !== 1 ? 's' : ''} ({endDate.toLocaleDateString()}). 
+                                                    Renew soon to avoid service interruption.
+                                                </p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )
+                            }
+                            
+                            return null
+                        })()}
+
                         {availableModules.length === 0 && (
                             <div className="p-6 bg-yellow-50 border-2 border-yellow-400 rounded-lg text-center">
                                 <p className="text-lg font-semibold text-yellow-800 mb-2">⏳ Loading modules...</p>
@@ -1497,69 +1693,61 @@ export default function EditEntityPage() {
                             </div>
                         )}
                         {availableModules.length > 0 && (
-                            <div className="overflow-x-auto border border-gray-200 rounded-lg">
+                            <div className="border border-gray-200 rounded-lg overflow-hidden">
                                 <table className="min-w-full divide-y divide-gray-200">
                                     <thead className="bg-gray-50">
                                         <tr>
-                                            <th scope="col" className="w-12 px-4 py-3 text-left">
-                                                <input
-                                                    type="checkbox"
-                                                    checked={selectedModules.length === availableModules.length}
-                                                    onChange={(e) => {
-                                                        if (e.target.checked) {
-                                                            setSelectedModules(availableModules.map(m => m.id))
-                                                        } else {
-                                                            setSelectedModules([])
-                                                        }
-                                                    }}
-                                                    className="w-4 h-4 text-emerald-600 border-gray-300 rounded focus:ring-emerald-500"
-                                                />
+                                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-20">
+                                                Active
                                             </th>
-                                            <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                                Module Name
+                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                                Module
                                             </th>
-                                            <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                                                 Description
                                             </th>
-                                            <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                            <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                                                 Price
                                             </th>
-                                            <th scope="col" className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                            <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
                                                 Frequency
                                             </th>
                                         </tr>
                                     </thead>
                                     <tbody className="bg-white divide-y divide-gray-200">
                                         {availableModules.map((module) => {
-                                            const existingModules = entity?.subscribed_modules || []
-                                            const isCurrentlySubscribed = existingModules.some((m: any) => m.module_id === module.id)
-                                            const existingModule = existingModules.find((m: any) => m.module_id === module.id)
+                                            // Check if module is active based on selectedModules state (from hospital_subscriptions table)
+                                            const isCurrentlyActive = selectedModules.includes(module.id)
+                                            const subscriptionExpired = isSubscriptionExpired()
                                             
                                             return (
                                                 <tr
                                                     key={module.id}
-                                                    className={`cursor-pointer transition-colors ${
-                                                        selectedModules.includes(module.id)
-                                                            ? isCurrentlySubscribed
-                                                                ? 'bg-blue-50 hover:bg-blue-100'
-                                                                : 'bg-emerald-50 hover:bg-emerald-100'
+                                                    className={`transition-colors ${
+                                                        isCurrentlyActive
+                                                            ? 'bg-emerald-50'
+                                                            : subscriptionExpired
+                                                            ? 'bg-gray-50 opacity-60'
                                                             : 'hover:bg-gray-50'
                                                     }`}
-                                                    onClick={() => {
-                                                        if (selectedModules.includes(module.id)) {
-                                                            setSelectedModules(selectedModules.filter(id => id !== module.id))
-                                                        } else {
-                                                            setSelectedModules([...selectedModules, module.id])
-                                                        }
-                                                    }}
                                                 >
                                                     <td className="px-4 py-4 whitespace-nowrap">
-                                                        <input
-                                                            type="checkbox"
-                                                            checked={selectedModules.includes(module.id)}
-                                                            onChange={() => {}}
-                                                            className="w-4 h-4 text-emerald-600 border-gray-300 rounded focus:ring-emerald-500"
-                                                        />
+                                                        <label className="relative inline-flex items-center cursor-pointer">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={isCurrentlyActive || false}
+                                                                onChange={() => handleModuleToggle(module.id)}
+                                                                disabled={loading || subscriptionExpired}
+                                                                className="sr-only peer"
+                                                            />
+                                                            <div className={`w-11 h-6 rounded-full peer transition-all ${
+                                                                subscriptionExpired
+                                                                    ? 'bg-gray-300 cursor-not-allowed'
+                                                                    : isCurrentlyActive
+                                                                    ? 'bg-emerald-600'
+                                                                    : 'bg-gray-200 peer-focus:ring-4 peer-focus:ring-emerald-300'
+                                                            } peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all`}></div>
+                                                        </label>
                                                     </td>
                                                     <td className="px-6 py-4 whitespace-nowrap">
                                                         <div className="flex items-center gap-2">
@@ -1568,118 +1756,97 @@ export default function EditEntityPage() {
                                                                     <span className="text-sm font-medium text-gray-900">
                                                                         {module.module_display_name}
                                                                     </span>
-                                                                    {isCurrentlySubscribed && (
-                                                                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
-                                                                            ✓ Active
+                                                                    {isCurrentlyActive && !subscriptionExpired && (
+                                                                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-100 text-emerald-800">
+                                                                            ● Active
+                                                                        </span>
+                                                                    )}
+                                                                    {!isCurrentlyActive && !subscriptionExpired && (
+                                                                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">
+                                                                            Inactive
+                                                                        </span>
+                                                                    )}
+                                                                    {subscriptionExpired && (
+                                                                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800">
+                                                                            ⚠️ Subscription Expired
                                                                         </span>
                                                                     )}
                                                                 </div>
                                                                 <div className="text-xs text-gray-500">
                                                                     {module.module_name}
                                                                 </div>
-                                                                {isCurrentlySubscribed && existingModule?.subscribed_at && (
-                                                                    <div className="text-xs text-blue-600 mt-1">
-                                                                        Subscribed: {new Date(existingModule.subscribed_at).toLocaleDateString()}
-                                                                    </div>
-                                                                )}
                                                             </div>
                                                         </div>
                                                     </td>
                                                     <td className="px-6 py-4">
-                                                    <div className="text-sm text-gray-600 max-w-md">
-                                                        {module.module_description || '-'}
-                                                    </div>
-                                                </td>
-                                                <td className="px-6 py-4 whitespace-nowrap text-right">
-                                                    {module.base_price > 0 ? (
-                                                        <div className="text-sm font-semibold text-emerald-600">
-                                                            {getCurrencySymbol(currency)}{calculateCustomerPrice(parseFloat(module.base_price)).toFixed(2)}
+                                                        <div className="text-sm text-gray-600 max-w-md">
+                                                            {module.module_description || '-'}
                                                         </div>
-                                                    ) : (
-                                                        <span className="text-sm font-medium text-gray-500">Free</span>
-                                                    )}
-                                                </td>
-                                                <td className="px-6 py-4 whitespace-nowrap text-center">
-                                                    <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                                                        module.payment_frequency === 'monthly' 
-                                                            ? 'bg-blue-100 text-blue-800' 
-                                                            : module.payment_frequency === 'yearly'
-                                                            ? 'bg-green-100 text-green-800'
-                                                            : 'bg-purple-100 text-purple-800'
-                                                    }`}>
-                                                        {module.payment_frequency === 'monthly' 
-                                                            ? 'Monthly' 
-                                                            : module.payment_frequency === 'yearly'
-                                                            ? 'Yearly'
-                                                            : 'One-time'}
-                                                    </span>
-                                                </td>
-                                            </tr>
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-right">
+                                                        {module.base_price > 0 ? (
+                                                            <div className="text-sm font-semibold text-emerald-600">
+                                                                {getCurrencySymbol(currency)}{calculateCustomerPrice(parseFloat(module.base_price)).toFixed(2)}
+                                                            </div>
+                                                        ) : (
+                                                            <span className="text-sm font-medium text-gray-500">Free</span>
+                                                        )}
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-center">
+                                                        <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                                                            module.payment_frequency === 'monthly' 
+                                                                ? 'bg-blue-100 text-blue-800' 
+                                                                : module.payment_frequency === 'yearly'
+                                                                ? 'bg-green-100 text-green-800'
+                                                                : 'bg-purple-100 text-purple-800'
+                                                        }`}>
+                                                            {module.payment_frequency === 'monthly' 
+                                                                ? 'Monthly' 
+                                                                : module.payment_frequency === 'yearly'
+                                                                ? 'Yearly'
+                                                                : 'One-time'}
+                                                        </span>
+                                                    </td>
+                                                </tr>
                                             )
                                         })}
                                     </tbody>
                                 </table>
                             </div>
                         )}
-                        {selectedModules.length > 0 && (
-                            <div className="mt-4 p-4 bg-emerald-50 border border-emerald-200 rounded-lg">
-                                <p className="text-sm font-medium text-emerald-800 mb-2">
-                                    {selectedModules.length} module(s) selected
-                                </p>
-                                {(() => {
-                                    const selectedModulesData = availableModules.filter(m => selectedModules.includes(m.id))
-                                    const yearlyTotal = selectedModulesData
-                                        .reduce((sum, m) => sum + calculateCustomerPrice(parseFloat(m.base_price)), 0)
-                                    
-                                    // Calculate pro-rated cost for new modules
-                                    const existingModules = entity?.subscribed_modules || []
-                                    const existingModuleIds = new Set(existingModules.map((m: any) => m.module_id))
-                                    const newModules = selectedModulesData.filter(m => !existingModuleIds.has(m.id))
-                                    
-                                    if (newModules.length > 0 && entity?.subscription_end_date) {
-                                        const now = new Date()
-                                        const endDate = new Date(entity.subscription_end_date)
-                                        const remainingMonths = Math.max(0, 
-                                            (endDate.getFullYear() - now.getFullYear()) * 12 + 
-                                            (endDate.getMonth() - now.getMonth()) +
-                                            (endDate.getDate() >= now.getDate() ? 0 : -1)
-                                        )
-                                        
-                                        const proRatedCost = newModules.reduce((sum, m) => {
-                                            const fullPrice = calculateCustomerPrice(parseFloat(m.base_price))
-                                            return sum + (fullPrice * remainingMonths / 12)
-                                        }, 0)
-                                        
-                                        return (
-                                            <div className="space-y-2">
-                                                <p className="text-sm text-emerald-700">
-                                                    Annual Subscription Cost: <span className="font-bold">{getCurrencySymbol(currency)}{yearlyTotal.toFixed(2)}/year</span>
-                                                </p>
-                                                <div className="pt-2 border-t border-emerald-300">
-                                                    <p className="text-xs text-emerald-600 mb-1">
-                                                        ℹ️ {newModules.length} new module(s) detected
-                                                    </p>
-                                                    <p className="text-sm text-orange-700 font-medium">
-                                                        Pro-rated cost ({remainingMonths} months): <span className="font-bold">{getCurrencySymbol(currency)}{proRatedCost.toFixed(2)}</span>
-                                                    </p>
-                                                    <p className="text-xs text-gray-600 mt-1">
-                                                        Subscription renews: {new Date(entity.subscription_end_date).toLocaleDateString()}
-                                                    </p>
-                                                </div>
-                                            </div>
-                                        )
-                                    }
-                                    
-                                    return (
-                                        <div className="space-y-1">
-                                            <p className="text-sm text-emerald-700">
-                                                Annual Subscription Cost: <span className="font-bold">{getCurrencySymbol(currency)}{yearlyTotal.toFixed(2)}/year</span>
+                        {(() => {
+                            // Count active modules from selectedModules state
+                            const totalModules = selectedModules.length
+                            
+                            if (totalModules > 0) {
+                                // Calculate yearly total from entity data
+                                const yearlyTotal = entity?.yearly_subscription_cost || 0
+                                
+                                return (
+                                    <div className="mt-4 p-4 bg-emerald-50 border border-emerald-200 rounded-lg">
+                                        <div className="flex items-center justify-between mb-2">
+                                            <p className="text-sm font-medium text-emerald-800">
+                                                {totalModules} active module{totalModules !== 1 ? 's' : ''}
                                             </p>
+                                            {entity?.subscription_end_date && (
+                                                <p className="text-xs text-gray-600">
+                                                    🔄 Renews: {new Date(entity.subscription_end_date).toLocaleDateString()}
+                                                </p>
+                                            )}
                                         </div>
-                                    )
-                                })()}
-                            </div>
-                        )}
+                                        <p className="text-sm text-emerald-700">
+                                            Annual Subscription Cost: <span className="font-bold">{getCurrencySymbol(currency)}{yearlyTotal.toFixed(2)}/year</span>
+                                        </p>
+                                        <p className="text-xs text-gray-600 mt-2">
+                                            💡 Use toggle switches to activate or deactivate modules anytime. 
+                                            New activations will be prorated for the remaining subscription period.
+                                        </p>
+                                    </div>
+                                )
+                            }
+                            
+                            return null
+                        })()}
                     </div>
 
                     {/* Action Buttons */}

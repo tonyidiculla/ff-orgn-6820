@@ -2,9 +2,10 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { supabase } from '@/lib/supabase'
+import { supabase } from '@/lib/supabase-client'
 import { useAuth } from '@/context/AuthContext'
 import type { Organization } from '@/types/organization'
+import { extractStorageUrl } from '@/lib/storage-service'
 
 export function OrganizationList() {
     const { user } = useAuth()
@@ -39,13 +40,17 @@ export function OrganizationList() {
                 setError(null)
 
                 // Get user's platform ID from public.profiles table
+                console.log('[OrganizationList] Fetching profile for user:', user.id)
                 const { data: profile, error: profileError } = await supabase
-                    .from('profiles')
+                    .from('profiles_with_auth')
                     .select('user_platform_id')
                     .eq('user_id', user.id)
                     .single()
 
+                console.log('[OrganizationList] Profile query result:', { profile, error: profileError })
+
                 if (profileError || !profile?.user_platform_id) {
+                    console.error('[OrganizationList] Profile error:', profileError)
                     throw new Error('Could not find user profile')
                 }
 
@@ -282,13 +287,15 @@ export function OrganizationList() {
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-200">
-                            {organizations.map((org) => (
+                            {organizations.map((org) => {
+                                const logoUrl = extractStorageUrl(org.logo_storage)
+                                return (
                                 <tr key={org.id} className="transition hover:bg-slate-50">
                                     <td className="px-6 py-4">
                                         <div className="flex items-center gap-3">
-                                            {org.logo_storage?.url ? (
+                                            {logoUrl ? (
                                                 <img 
-                                                    src={org.logo_storage.url} 
+                                                    src={logoUrl} 
                                                     alt={org.organization_name} 
                                                     className="h-10 w-10 rounded-lg object-contain"
                                                 />
@@ -382,7 +389,8 @@ export function OrganizationList() {
                                         </div>
                                     </td>
                                 </tr>
-                            ))}
+                                )
+                            })}
                         </tbody>
                     </table>
                 </div>

@@ -1,9 +1,15 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter, useParams } from 'next/navigation'
-import { supabase } from '@/lib/supabase'
+import { supabase } from '@/lib/supabase-client'
 import { useAuth } from '@/context/AuthContext'
+import { 
+  getOrganizationById, 
+  getHospitalsByOrganization, 
+  updateHospitalStatus, 
+  softDeleteHospital 
+} from '@/lib/database-service'
 
 interface Entity {
     entity_platform_id: string
@@ -86,56 +92,23 @@ export default function OrganizationEntitiesPage() {
                 setError(null)
                 console.log('[EntitiesPage] Starting fetch for user:', userId, 'org:', organizationPlatformId)
 
-                // Fetch organization details using platform ID
-                const { data: orgData, error: orgError } = await supabase
-                    
-                    .from('organizations')
-                    .select('organization_id, organization_name, organization_platform_id')
-                    .eq('organization_platform_id', organizationPlatformId)
-                    .single()
+                // Fetch organization using JWT + Service Account
+                const orgResult = await getOrganizationById(organizationPlatformId)
+                if (!orgResult.success) throw new Error(orgResult.error)
+                setOrganization(orgResult.data)
 
-                if (orgError) throw orgError
-                setOrganization(orgData)
-
-                // Fetch entities for this organization using the organization's platform ID
+                // Fetch entities for this organization using JWT + Service Account
                 console.log('[EntitiesPage] Fetching hospitals for org platform ID:', organizationPlatformId)
                 
-                // First, let's try a simple count query to test RLS
-                const { count: testCount, error: testError } = await supabase
-                    
-                    .from('hospital_master')
-                    .select('*', { count: 'exact', head: true })
-                
-                console.log('[EntitiesPage] Test count query:', { count: testCount, error: testError })
-                
-                const { data: entitiesData, error: entitiesError } = await supabase
-                    
-                    .from('hospital_master')
-                    .select(`
-                        entity_platform_id,
-                        entity_name,
-                        organization_platform_id,
-                        manager_email_id,
-                        manager_phone_number,
-                        address,
-                        city,
-                        state,
-                        post_code,
-                        country,
-                        is_active,
-                        created_at
-                    `)
-                    .eq('organization_platform_id', organizationPlatformId)
-                    .order('created_at', { ascending: false })
+                const entitiesResult = await getHospitalsByOrganization(organizationPlatformId)
+                if (!entitiesResult.success) throw new Error(entitiesResult.error)
 
-                console.log('[EntitiesPage] Hospitals query result:', { count: entitiesData?.length, error: entitiesError })
-                console.log('[EntitiesPage] Hospitals data:', entitiesData)
+                console.log('[EntitiesPage] Hospitals query result:', { count: entitiesResult.data?.length })
+                console.log('[EntitiesPage] Hospitals data:', entitiesResult.data)
                 
-                if (entitiesError) {
-                    console.error('[EntitiesPage] Hospitals query error:', entitiesError)
-                    throw entitiesError
-                }
-                
+                const entitiesData = entitiesResult.data
+
+                // The entitiesData now comes from our service call result above
                 setEntities(entitiesData || [])
                 console.log('[EntitiesPage] ✅ Entities state updated with', entitiesData?.length || 0, 'entities')
             } catch (err: any) {
@@ -279,15 +252,6 @@ export default function OrganizationEntitiesPage() {
             <div className="relative mx-auto w-full max-w-6xl">
                 <div className="mb-6 flex items-center justify-between">
                     <div>
-                        <button
-                            onClick={() => router.push('/organization')}
-                            className="mb-2 flex items-center gap-2 text-sm text-slate-600 transition hover:text-slate-800"
-                        >
-                            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                            </svg>
-                            Back to Organizations
-                        </button>
                         <h1 className="text-3xl font-bold text-slate-800">
                             {organization?.organization_name} - Entities
                         </h1>
@@ -430,7 +394,7 @@ export default function OrganizationEntitiesPage() {
                                                 <td className="px-6 py-4">
                                                     <div className="flex items-center justify-end gap-2">
                                                         <button
-                                                            onClick={() => router.push(`/organization/${organizationPlatformId}/entities/${entity.entity_platform_id}/hms`)}
+                                                            onClick={() => window.location.href = `http://localhost:6900?organization=${organizationPlatformId}&entity=${entity.entity_platform_id}`}
                                                             className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-emerald-700 flex items-center gap-1"
                                                             title="Launch HMS"
                                                         >

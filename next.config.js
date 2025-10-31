@@ -23,6 +23,16 @@ const nextConfig = {
   typescript: {
     ignoreBuildErrors: false,
   },
+  
+  // Proxy auth requests to auth service
+  async rewrites() {
+    return [
+      {
+        source: '/auth/:path*',
+        destination: 'http://localhost:6800/:path*',
+      },
+    ];
+  },
 };
 
 export default nextConfig;

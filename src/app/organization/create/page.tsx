@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, ChangeEvent } from 'react'
 import { useRouter } from 'next/navigation'
-import { supabase } from '@/lib/supabase'
+import { supabase } from '@/lib/supabase-client'
 import { useAuth } from '@/context/AuthContext'
 import type { Organization } from '@/types/organization'
 import CurrencySelector from '@/components/CurrencySelector'
@@ -16,10 +16,11 @@ import {
     isEntityPlatformId,
     isHumanPlatformId 
 } from '@/utils/platformId'
+import { uploadFile } from '@/lib/storage-service'
 
 export default function CreateOrganizationPage() {
     const router = useRouter()
-    const { user, loading: userLoading } = useUser()
+    const { user, loading: userLoading } = useAuth()
     const fileInputRef = useRef<HTMLInputElement>(null)
     const certificateInputRef = useRef<HTMLInputElement>(null)
 
@@ -92,7 +93,7 @@ export default function CreateOrganizationPage() {
             try {
                 const { data, error } = await supabase
                     
-                    .from('profiles')
+                    .from('profiles_with_auth')
                     .select('user_id, user_platform_id, first_name, last_name, email')
                     .eq('user_id', user.id)
                     .single()
@@ -257,30 +258,32 @@ export default function CreateOrganizationPage() {
             }
 
             // Upload logo if provided
-            let uploadedLogoPath: string | null = null
+            let uploadedLogoUrl: string | null = null
             if (logoFile) {
-                const fileExt = logoFile.name.split('.').pop()
-                const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`
-                const filePath = `${fileName}`
-
-                const { error: uploadError } = await supabase.storage
-                    .from('organization-logos')
-                    .upload(filePath, logoFile)
-
-                if (uploadError) throw uploadError
-                uploadedLogoPath = filePath
+                console.log('[CreateOrg] Uploading logo with organization_platform_id:', formData.organization_platform_id)
+                
+                const result = await uploadFile({
+                    file: logoFile,
+                    type: 'organization',
+                    id: formData.organization_platform_id
+                })
+                
+                uploadedLogoUrl = result.url
+                console.log('[CreateOrg] Logo uploaded successfully:', result)
             }
 
-            // Upload certificate if provided
+            // Upload certificate if provided (to private organization bucket)
             let uploadedCertificatePath: string | null = null
             if (certificateFile) {
                 const fileExt = certificateFile.name.split('.').pop()
-                const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`
-                const filePath = `${fileName}`
+                const fileName = `certificate_${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`
+                const filePath = `${formData.organization_platform_id}/${fileName}`
+
+                console.log('[CreateOrg] Uploading certificate to organization bucket:', filePath)
 
                 const { error: uploadError } = await supabase.storage
-                    .from('organization-certificates')
-                    .upload(filePath, certificateFile)
+                    .from('organization')
+                    .upload(filePath, certificateFile, { upsert: true })
 
                 if (uploadError) throw uploadError
                 uploadedCertificatePath = filePath
@@ -306,7 +309,7 @@ export default function CreateOrganizationPage() {
                 notes: formData.notes || null,
                 currency: formData.currency || null,
                 language: formData.language || null,
-                owner_platform_id: formData.owner_platform_id || user?.user_metadata?.user_platform_id || null,
+                owner_platform_id: formData.owner_platform_id || null, // Note: Need to get user_platform_id from user context
                 owner_first_name: formData.owner_first_name || null,
                 owner_last_name: formData.owner_last_name || null,
                 owner_email: formData.owner_email || null,
@@ -327,22 +330,18 @@ export default function CreateOrganizationPage() {
                 updated_at: new Date().toISOString()
             }
 
-            // Add logo storage if uploaded
-            if (uploadedLogoPath) {
-                const { data: { publicUrl } } = supabase.storage
-                    .from('organization-logos')
-                    .getPublicUrl(uploadedLogoPath)
-
+                        // Add logo storage if uploaded
+            if (uploadedLogoUrl) {
                 insertData.logo_storage = {
-                    url: publicUrl,
-                    file_path: uploadedLogoPath,
+                    url: uploadedLogoUrl,
+                    bucket: 'avatars',
                     storage_type: 'supabase'
                 }
             }
 
-            // Add certificate URL if uploaded
+            // Add certificate URL if uploaded (store full path with bucket)
             if (uploadedCertificatePath) {
-                insertData.certificate_of_incorporation_url = uploadedCertificatePath
+                insertData.certificate_of_incorporation_url = `organization/${uploadedCertificatePath}`
             }
 
             console.log('Creating organization with data:', insertData)

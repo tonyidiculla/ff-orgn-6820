@@ -13,7 +13,7 @@ export async function fetchUserPrivileges(userId: string): Promise<UserPrivilege
         // First, get the user's platform_id from profiles in public schema
         const { data: profile, error: profileError } = await supabase
             
-            .from('profiles')
+            .from('profiles_with_auth')
             .select('user_platform_id')
             .eq('user_id', userId)
             .single()
@@ -31,10 +31,11 @@ export async function fetchUserPrivileges(userId: string): Promise<UserPrivilege
         // Now query using user_platform_id instead of user_id
         const { data: assignments, error: assignmentsError } = await supabase
             
-            .from('user_to_role_assignment')
-            .select('*')
-            .eq('user_platform_id', userPlatformId)
+            .from('user_expertise_assignment')
+            .select('platform_role_id, is_active')
+            .eq('user_platform_id', profile.user_platform_id)
             .eq('is_active', true)
+            .maybeSingle();
 
         console.log('[fetchUserPrivileges] Assignments query result:', { 
             count: assignments?.length || 0, 

@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, ChangeEvent, use } from 'react'
 import { useRouter } from 'next/navigation'
-import { supabase } from '@/lib/supabase'
+import { supabase } from '@/lib/supabase-client'
 import { useAuth } from '@/context/AuthContext'
 import type { Organization } from '@/types/organization'
 import CurrencySelector from '@/components/CurrencySelector'
@@ -16,10 +16,11 @@ import {
     isEntityPlatformId,
     isHumanPlatformId 
 } from '@/utils/platformId'
+import { uploadFile, extractStorageUrl } from '@/lib/storage-service'
 
 export default function EditOrganizationPage({ params }: { params: Promise<{ id: string }> }) {
     const router = useRouter()
-    const { user, loading: userLoading } = useUser()
+    const { user, loading: userLoading } = useAuth()
     const fileInputRef = useRef<HTMLInputElement>(null)
     
     // Unwrap params using React.use()
@@ -94,7 +95,7 @@ export default function EditOrganizationPage({ params }: { params: Promise<{ id:
             try {
                 const { data, error } = await supabase
                     
-                    .from('profiles')
+                    .from('profiles_with_auth')
                     .select('user_id, user_platform_id, first_name, last_name, email')
                     .eq('user_id', user.id)
                     .single()
@@ -218,7 +219,11 @@ export default function EditOrganizationPage({ params }: { params: Promise<{ id:
 
     const handleLogoUpload = async (e: ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0]
-        if (!file || !user?.id) {
+        if (!file || !formData.organization_platform_id) {
+            console.error('[EditOrg] Upload blocked - missing file or organization_platform_id:', {
+                hasFile: !!file,
+                organization_platform_id: formData.organization_platform_id
+            })
             e.target.value = ''
             return
         }
@@ -227,23 +232,20 @@ export default function EditOrganizationPage({ params }: { params: Promise<{ id:
             setUploading(true)
             setError(null)
 
-            const fileExt = file.name.split('.').pop()
-            const fileName = `${Date.now()}.${fileExt}`
-            const filePath = `${user.id}/${fileName}`
+            console.log('[EditOrg] Calling uploadFile with:', {
+                fileName: file.name,
+                type: 'organization',
+                id: formData.organization_platform_id
+            })
 
-            // Upload to storage
-            const { error: uploadError } = await supabase.storage
-                .from('profile-icons')
-                .upload(filePath, file, { upsert: true })
+            // Upload using the storage service
+            const result = await uploadFile({
+                file,
+                type: 'organization',
+                id: formData.organization_platform_id,
+            })
 
-            if (uploadError) throw uploadError
-
-            // Get public URL
-            const { data: { publicUrl } } = supabase.storage
-                .from('profile-icons')
-                .getPublicUrl(filePath)
-
-            setLogoUrl(publicUrl)
+            setLogoUrl(result.url)
             setSuccess('Logo uploaded successfully!')
             setTimeout(() => setSuccess(null), 3000)
         } catch (err) {
@@ -287,20 +289,33 @@ export default function EditOrganizationPage({ params }: { params: Promise<{ id:
             setUploading(true)
             setError(null)
 
+            if (!formData.organization_platform_id) {
+                throw new Error('Organization Platform ID is required')
+            }
+
             const fileExt = file.name.split('.').pop()
-            const fileName = `certificate_${Date.now()}.${fileExt}`
-            const filePath = `${user.id}/documents/${fileName}`
+            const fileName = `certificate_${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`
+            const filePath = `${formData.organization_platform_id}/${fileName}`
 
-            // Upload to storage (using organization-certificates bucket)
-            const { error: uploadError } = await supabase.storage
-                .from('organization-certificates')
-                .upload(filePath, file, { upsert: true })
+            console.log('[Certificate Upload] Uploading to:', { bucket: 'organization', filePath, fileSize: file.size });
 
-            if (uploadError) throw uploadError
+            // Upload to storage (using organization bucket with authenticated client)
+            const { data, error: uploadError } = await supabase.storage
+                .from('organization')
+                .upload(filePath, file, { 
+                    upsert: true,
+                    contentType: file.type 
+                })
 
-            // Store the file path (bucket is private, we'll generate signed URLs when needed)
-            // For now, store the full path so we can retrieve it later
-            const fullPath = `organization-certificates/${filePath}`
+            if (uploadError) {
+                console.error('[Certificate Upload] Upload error:', uploadError);
+                throw uploadError;
+            }
+
+            console.log('[Certificate Upload] Upload successful:', data);
+
+            // Store the full path with bucket prefix
+            const fullPath = `organization/${filePath}`
             
             setCertificateUrl(fullPath)
             setSuccess('Certificate uploaded successfully!')
@@ -323,15 +338,21 @@ export default function EditOrganizationPage({ params }: { params: Promise<{ id:
         try {
             // Extract the file path from the stored URL
             let filePath = certificateUrl
+            let bucket = 'organization'
             
             // If it includes the bucket name, extract just the path
-            if (filePath.includes('organization-certificates/')) {
+            if (filePath.includes('organization/')) {
+                filePath = filePath.split('organization/')[1]
+                bucket = 'organization'
+            } else if (filePath.includes('organization-certificates/')) {
+                // Support old format for backward compatibility
                 filePath = filePath.split('organization-certificates/')[1]
+                bucket = 'organization-certificates'
             }
 
             // Generate a signed URL valid for 1 hour
             const { data, error } = await supabase.storage
-                .from('organization-certificates')
+                .from(bucket)
                 .createSignedUrl(filePath, 3600) // 3600 seconds = 1 hour
 
             if (error) throw error
@@ -434,7 +455,7 @@ export default function EditOrganizationPage({ params }: { params: Promise<{ id:
             if (logoUrl) {
                 updateData.logo_storage = {
                     url: logoUrl,
-                    file_path: logoUrl.split('/').slice(-2).join('/'),
+                    bucket: 'avatars',
                     storage_type: 'supabase'
                 }
             }

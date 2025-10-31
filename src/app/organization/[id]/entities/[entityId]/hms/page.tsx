@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter, useParams } from 'next/navigation'
-import { supabase } from '@/lib/supabase'
+import { supabase } from '@/lib/supabase-client'
 import { useAuth } from '@/context/AuthContext'
+import { getOrganizationById, getHospitalById } from '@/lib/database-service'
 
 interface Entity {
     entity_platform_id: string
@@ -44,26 +45,15 @@ export default function HMSHomePage() {
             try {
                 setLoading(true)
 
-                // Fetch organization
-                const { data: orgData, error: orgError } = await supabase
-                    .from('organizations')
-                    .select('organization_id, organization_name, organization_platform_id')
-                    .eq('organization_platform_id', organizationPlatformId)
-                    .single()
+                // Fetch organization using JWT + Service Account
+                const orgResult = await getOrganizationById(organizationPlatformId)
+                if (!orgResult.success) throw new Error(orgResult.error)
+                setOrganization(orgResult.data)
 
-                if (orgError) throw orgError
-                setOrganization(orgData)
-
-                // Fetch entity from public schema
-                const { data: entityData, error: entityError } = await supabase
-                    
-                    .from('hospital_master')
-                    .select('*')
-                    .eq('entity_platform_id', entityPlatformId)
-                    .single()
-
-                if (entityError) throw entityError
-                setEntity(entityData)
+                // Fetch entity using JWT + Service Account
+                const entityResult = await getHospitalById(entityPlatformId)
+                if (!entityResult.success) throw new Error(entityResult.error)
+                setEntity(entityResult.data)
 
             } catch (err) {
                 console.error('Error fetching data:', err)

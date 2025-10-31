@@ -1,144 +1,41 @@
-/**
- * Reusable components for privilege-based UI rendering
- */
+// Privilege gates stub - privileges not currently implemented in JWT auth
+import { ReactNode } from 'react'
 
-'use client'
-
-import type { ReactNode } from 'react'
-
-import { useAuth } from '@/context/AuthContext'
-import type { PrivilegeLevel } from '@/lib/privileges'
-import {
-    hasPrivilegeLevel,
-    hasPermission,
-    hasAnyPermission,
-    hasAllPermissions,
-    hasModule,
-    hasAnyModule,
-} from '@/lib/privileges'
-
-interface RequirePrivilegeLevelProps {
-    level: PrivilegeLevel
+export interface PrivilegeGateProps {
     children: ReactNode
     fallback?: ReactNode
 }
 
-/**
- * Only render children if user has at least the specified privilege level
- */
-export function RequirePrivilegeLevel({ level, children, fallback = null }: RequirePrivilegeLevelProps) {
-    const { privileges, privilegesLoading } = useUser()
-
-    if (privilegesLoading) {
-        return null
-    }
-
-    const hasAccess = hasPrivilegeLevel(privileges?.highestPrivilegeLevel ?? null, level)
-
-    return hasAccess ? <>{children}</> : <>{fallback}</>
+// For now, all privilege checks pass (show content)
+// TODO: Implement proper privilege fetching from backend
+export function PlatformAdminGate({ children, fallback }: PrivilegeGateProps) {
+    return <>{children}</>
 }
 
-interface RequirePermissionProps {
-    permission: string
-    children: ReactNode
-    fallback?: ReactNode
+export function OrganizationAdminGate({ children, fallback }: PrivilegeGateProps) {
+    return <>{children}</>
 }
 
-/**
- * Only render children if user has the specified permission
- */
-export function RequirePermission({ permission, children, fallback = null }: RequirePermissionProps) {
-    const { privileges, privilegesLoading } = useUser()
-
-    if (privilegesLoading) {
-        return null
-    }
-
-    const hasAccess = hasPermission(privileges, permission)
-
-    return hasAccess ? <>{children}</> : <>{fallback}</>
+export function EntityAdminGate({ children, fallback }: PrivilegeGateProps) {
+    return <>{children}</>
 }
 
-interface RequireAnyPermissionProps {
-    permissions: string[]
-    children: ReactNode
-    fallback?: ReactNode
+export function MedicalPractitionerGate({ children, fallback }: PrivilegeGateProps) {
+    return <>{children}</>
 }
 
-/**
- * Only render children if user has any of the specified permissions
- */
-export function RequireAnyPermission({ permissions, children, fallback = null }: RequireAnyPermissionProps) {
-    const { privileges, privilegesLoading } = useUser()
-
-    if (privilegesLoading) {
-        return null
-    }
-
-    const hasAccess = hasAnyPermission(privileges, permissions)
-
-    return hasAccess ? <>{children}</> : <>{fallback}</>
+export function ManagementGate({ children, fallback }: PrivilegeGateProps) {
+    return <>{children}</>
 }
 
-interface RequireAllPermissionsProps {
-    permissions: string[]
-    children: ReactNode
-    fallback?: ReactNode
+export function OperationalStaffGate({ children, fallback }: PrivilegeGateProps) {
+    return <>{children}</>
 }
 
-/**
- * Only render children if user has all of the specified permissions
- */
-export function RequireAllPermissions({ permissions, children, fallback = null }: RequireAllPermissionsProps) {
-    const { privileges, privilegesLoading } = useUser()
-
-    if (privilegesLoading) {
-        return null
-    }
-
-    const hasAccess = hasAllPermissions(privileges, permissions)
-
-    return hasAccess ? <>{children}</> : <>{fallback}</>
+export function SupportStaffGate({ children, fallback }: PrivilegeGateProps) {
+    return <>{children}</>
 }
 
-interface RequireModuleProps {
-    module: string
-    children: ReactNode
-    fallback?: ReactNode
-}
-
-/**
- * Only render children if user has access to the specified module
- */
-export function RequireModule({ module, children, fallback = null }: RequireModuleProps) {
-    const { privileges, privilegesLoading } = useUser()
-
-    if (privilegesLoading) {
-        return null
-    }
-
-    const hasAccess = hasModule(privileges, module)
-
-    return hasAccess ? <>{children}</> : <>{fallback}</>
-}
-
-interface RequireAnyModuleProps {
-    modules: string[]
-    children: ReactNode
-    fallback?: ReactNode
-}
-
-/**
- * Only render children if user has access to any of the specified modules
- */
-export function RequireAnyModule({ modules, children, fallback = null }: RequireAnyModuleProps) {
-    const { privileges, privilegesLoading } = useUser()
-
-    if (privilegesLoading) {
-        return null
-    }
-
-    const hasAccess = hasAnyModule(privileges, modules)
-
-    return hasAccess ? <>{children}</> : <>{fallback}</>
+export function BasicUserGate({ children, fallback }: PrivilegeGateProps) {
+    return <>{children}</>
 }

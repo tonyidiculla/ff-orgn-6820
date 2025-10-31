@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { supabase } from '@/lib/supabase'
+import { supabase } from '@/lib/supabase-client'
 import { useAuth } from '@/context/AuthContext'
 
 interface Entity {
@@ -55,7 +55,7 @@ export function EntityList() {
                 // First, get user's platform_id
                 const { data: profile, error: profileError } = await supabase
                     
-                    .from('profiles')
+                    .from('profiles_with_auth')
                     .select('user_platform_id')
                     .eq('user_id', userId)
                     .single()
